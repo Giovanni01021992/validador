@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Identificador de Billetes</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Iconos de Lucide -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Tesseract.js para reconocimiento de texto por cámara (OCR) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        /* Animación personalizada para la línea del escáner */
+        @keyframes scan {
+            0%, 100% { top: 0%; opacity: 0; }
+            10%, 90% { opacity: 1; }
+            50% { top: 100%; }
+        }
+        .animate-scan {
+            animation: scan 2.5s ease-in-out infinite;
+        }
+        /* Scrollbar delgada para el historial */
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 min-h-screen flex items-center justify-center p-4">
+
+    <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md relative flex flex-col max-h-[95vh]">
+        
+        <!-- Contenido scrolleable principal -->
+        <div class="overflow-y-auto scrollbar-thin pr-2 pb-2">
+            <!-- Encabezado -->
+            <div class="text-center mb-6">
+                <div class="bg-fuchsia-100 text-fuchsia-600 p-3 rounded-full inline-block mb-3">
+                    <i data-lucide="banknote" class="w-8 h-8"></i>
+                </div>
+                <h1 class="text-2xl font-bold text-gray-800">Verificador de Billetes</h1>
+                <p class="text-gray-500 text-sm mt-1">Seleccione el corte e ingrese el número de serie con su letra (Ej: 77100001 B).</p>
+                
+                <!-- Indicador de Conexión de Base de Datos -->
+                <div id="dbStatus" class="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600 transition-colors">
+                    <i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i>
+                    Conectando a base de datos...
+                </div>
+            </div>
+
+            <!-- Formulario de Búsqueda -->
+            <div class="space-y-4">
+                <div>
+                    <label for="corteSelect" class="block text-sm font-medium text-gray-700 mb-1">Corte del billete</label>
+                    <select id="corteSelect" class="block w-full px-3 py-3 border border-gray-300 rounded-lg focus:ring-fuchsia-500 focus:border-fuchsia-500 transition-colors bg-white">
+                        <option value="10">Corte Bs 10</option>
+                        <option value="20">Corte Bs 20</option>
+                        <option value="50">Corte Bs 50</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="codigoInput" class="block text-sm font-medium text-gray-700 mb-1">Número de serie</label>
+                    <div class="flex gap-2">
+                        <div class="relative flex-1">
+                            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <i data-lucide="search" class="w-5 h-5 text-gray-400"></i>
+                            </div>
+                            <input type="text" id="codigoInput" 
+                                class="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-fuchsia-500 focus:border-fuchsia-500 uppercase font-mono tracking-widest transition-colors"
+                                placeholder="Ej: 77100001 B"
+                                autocomplete="off">
+                        </div>
+                        <!-- Botón de Cámara -->
+                        <button onclick="abrirCamara()" type="button" class="bg-fuchsia-100 text-fuchsia-700 hover:bg-fuchsia-200 px-4 rounded-lg flex items-center justify-center transition-colors border border-fuchsia-200 shadow-sm" title="Escanear con cámara">
+                            <i data-lucide="camera" class="w-6 h-6"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Botones de Acción -->
+                <div class="flex gap-2">
+                    <button onclick="verificarCodigo()" 
+                        class="flex-1 bg-fuchsia-600 hover:bg-fuchsia-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors flex justify-center items-center gap-2 shadow-md">
+                        <i data-lucide="shield-check" class="w-5 h-5"></i>
+                        Verificar
+                    </button>
+                    <button onclick="limpiarFormulario()" type="button" 
+                        class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-3 px-4 rounded-lg transition-colors flex justify-center items-center gap-2 shadow-sm" title="Limpiar y siguiente">
+                        <i data-lucide="eraser" class="w-5 h-5"></i>
+                        Limpiar
+                    </button>
+                </div>
+            </div>
+
+            <!-- Área de Resultados -->
+            <div id="resultadoArea" class="mt-6 hidden rounded-lg p-4 border transition-all duration-300">
+                <div class="flex items-start gap-3">
+                    <div id="iconoResultado" class="mt-0.5 shrink-0"></div>
+                    <div>
+                        <h3 id="tituloResultado" class="font-bold text-lg"></h3>
+                        <p id="mensajeResultado" class="text-sm mt-1"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Historial de Verificaciones -->
+            <div id="historialContenedor" class="mt-8 border-t border-gray-200 pt-6 hidden">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-sm font-bold text-gray-700 uppercase tracking-wider">Últimas Verificaciones</h3>
+                    <span id="contadorSesion" class="text-xs font-semibold bg-gray-100 text-gray-600 py-1 px-2 rounded-full">0 Billetes</span>
+                </div>
+                <div id="listaHistorial" class="space-y-2">
+                    <!-- Los items del historial se insertarán aquí por JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Cámara Oculto -->
+    <div id="cameraModal" class="hidden fixed inset-0 bg-slate-900/95 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+        <div class="bg-white rounded-2xl w-full max-w-md p-5 flex flex-col items-center shadow-2xl relative">
+            <div class="w-full flex justify-between items-center mb-2">
+                <h3 class="font-bold text-gray-800 text-lg flex items-center gap-2">
+                    <i data-lucide="scan-line" class="w-5 h-5 text-fuchsia-600"></i>
+                    Escáner de Serie
+                </h3>
+                <div class="flex gap-2">
+                    <button id="btnLinterna" onclick="toggleLinterna()" class="hidden text-gray-500 hover:text-yellow-500 transition-colors p-1.5 rounded-full hover:bg-yellow-50 bg-gray-100" title="Activar/Desactivar Linterna">
+                        <i id="iconoLinterna" data-lucide="zap" class="w-5 h-5"></i>
+                    </button>
+                    <button onclick="cerrarCamara()" class="text-gray-400 hover:text-red-500 transition-colors p-1.5 rounded-full hover:bg-red-50 bg-gray-100">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="bg-blue-50 text-blue-800 text-xs p-3 rounded-lg w-full mb-4 flex items-start gap-2 border border-blue-100">
+                <i data-lucide="info" class="w-4 h-4 shrink-0 mt-0.5"></i>
+                <p id="instruccionCamara">Cargando instrucciones...</p>
+            </div>
+
+            <div class="relative w-full aspect-[4/3] bg-black rounded-xl overflow-hidden mb-4 shadow-inner">
+                <video id="videoElement" autoplay playsinline class="w-full h-full object-cover"></video>
+                <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div class="w-[75%] h-16 border-[3px] border-fuchsia-500 rounded-lg shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] relative overflow-hidden bg-fuchsia-500/10 backdrop-blur-[1px]">
+                        <div id="scanLine" class="absolute left-0 w-full h-0.5 bg-fuchsia-300 shadow-[0_0_12px_3px_rgba(217,70,239,0.9)] hidden"></div>
+                    </div>
+                </div>
+            </div>
+
+            <button id="captureBtn" onclick="capturarYLeer()" class="w-full bg-fuchsia-600 hover:bg-fuchsia-700 text-white font-semibold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-md">
+                <i data-lucide="aperture" class="w-5 h-5"></i>
+                Capturar y Leer
+            </button>
+            
+            <div id="ocrLoading" class="hidden w-full text-center mt-4">
+                <div class="inline-flex items-center gap-2 text-fuchsia-600 font-medium bg-fuchsia-50 px-4 py-2 rounded-full border border-fuchsia-100">
+                    <i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>
+                    Procesando imagen...
+                </div>
+            </div>
+            
+            <canvas id="canvasElement" class="hidden"></canvas>
+        </div>
+    </div>
+
+    <!-- Modal de Mensaje Personalizado (Reemplaza a alert) -->
+    <div id="messageModal" class="hidden fixed inset-0 bg-slate-900/60 z-[100] flex items-center justify-center p-6 backdrop-blur-sm">
+        <div class="bg-white rounded-xl w-full max-w-sm p-6 shadow-2xl text-center">
+            <div id="msgIcon" class="mx-auto mb-4 p-3 rounded-full inline-block"></div>
+            <h3 id="msgTitle" class="text-lg font-bold text-gray-800 mb-2"></h3>
+            <p id="msgBody" class="text-sm text-gray-600 mb-6"></p>
+            <button onclick="closeMessage()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold py-2.5 rounded-lg transition-colors">
+                Entendido
+            </button>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+
+        let historialVerificaciones = [];
+        let streamCamara = null;
+        let trackCamara = null;
+        let linternaEncendida = false;
+
+        const URL_BASE_DATOS_ONLINE = "https://gist.githubusercontent.com/Giovanni01021992/8998210f2fc554aedb6686f09d221a36/raw/billetes.json"; 
+
+        const rangosLocalesFallback = {
+            "10": [
+                { min: 77100001, max: 77550000 }, { min: 78000001, max: 78450000 },
+                { min: 78900001, max: 96350000 }, { min: 96350001, max: 96800000 },
+                { min: 96800001, max: 97250000 }, { min: 98150001, max: 98600000 },
+                { min: 104900001, max: 105350000 }, { min: 105350001, max: 105800000 },
+                { min: 106700001, max: 107150000 }, { min: 107600001, max: 108050000 },
+                { min: 108050001, max: 108500000 }, { min: 109400001, max: 109850000 },
+                { min: 44810476, max: 44810477 }
+            ],
+            "20": [
+                { min: 87280145, max: 91646549 }, { min: 96650001, max: 97100000 },
+                { min: 99800001, max: 100250000 }, { min: 100250001, max: 100700000 },
+                { min: 109250001, max: 109700000 }, { min: 110600001, max: 111050000 },
+                { min: 111050001, max: 111500000 }, { min: 111950001, max: 112400000 },
+                { min: 112400001, max: 112850000 }, { min: 112850001, max: 113300000 },
+                { min: 114200001, max: 114650000 }, { min: 114650001, max: 115100000 },
+                { min: 115100001, max: 115550000 }, { min: 118700001, max: 119150000 },
+                { min: 119150001, max: 119600000 }, { min: 120500001, max: 120950000 }
+            ],
+            "50": [
+                { min: 67250001, max: 67700000 }, { min: 69050001, max: 69500000 },
+                { min: 69500001, max: 69950000 }, { min: 69950001, max: 70400000 },
+                { min: 70400001, max: 70850000 }, { min: 70850001, max: 71300000 },
+                { min: 76310012, max: 85139995 }, { min: 86400001, max: 86850000 },
+                { min: 90900001, max: 91350000 }, { min: 91800001, max: 92250000 }
+            ]
+        };
+
+        let rangosInhabilitados = {};
+
+        // Mensaje personalizado en lugar de alert
+        function showMessage(title, body, type = 'info') {
+            const modal = document.getElementById('messageModal');
+            const icon = document.getElementById('msgIcon');
+            const titleEl = document.getElementById('msgTitle');
+            const bodyEl = document.getElementById('msgBody');
+
+            titleEl.textContent = title;
+            bodyEl.innerHTML = body;
+
+            if(type === 'error') {
+                icon.className = "mx-auto mb-4 p-3 rounded-full inline-block bg-red-100 text-red-600";
+                icon.innerHTML = '<i data-lucide="shield-alert" class="w-8 h-8"></i>';
+            } else {
+                icon.className = "mx-auto mb-4 p-3 rounded-full inline-block bg-blue-100 text-blue-600";
+                icon.innerHTML = '<i data-lucide="info" class="w-8 h-8"></i>';
+            }
+
+            modal.classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function closeMessage() {
+            document.getElementById('messageModal').classList.add('hidden');
+        }
+
+        async function cargarBaseDeDatos() {
+            const dbStatus = document.getElementById('dbStatus');
+            try {
+                if (!URL_BASE_DATOS_ONLINE) throw new Error("No configurado");
+                const respuesta = await fetch(URL_BASE_DATOS_ONLINE + "?t=" + new Date().getTime());
+                if (!respuesta.ok) throw new Error("Fallo red");
+                const textoObtenido = await respuesta.text();
+                const textoLimpio = textoObtenido.replace(/,\s*([\]}])/g, '$1');
+                rangosInhabilitados = JSON.parse(textoLimpio); 
+                dbStatus.className = "mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700";
+                dbStatus.innerHTML = '<i data-lucide="wifi" class="w-3.5 h-3.5"></i> Base de datos en línea';
+            } catch (error) {
+                rangosInhabilitados = rangosLocalesFallback;
+                dbStatus.className = "mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700";
+                dbStatus.innerHTML = `<i data-lucide="wifi-off" class="w-3.5 h-3.5"></i> Base de datos local (Offline)`;
+            }
+            lucide.createIcons();
+        }
+
+        window.addEventListener('DOMContentLoaded', cargarBaseDeDatos);
+
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function reproducirSonido(tipo) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const oscilador = audioCtx.createOscillator();
+            const ganancia = audioCtx.createGain();
+            oscilador.connect(ganancia);
+            ganancia.connect(audioCtx.destination);
+            const ahora = audioCtx.currentTime;
+            if (tipo === 'valido') {
+                oscilador.type = 'sine';
+                oscilador.frequency.setValueAtTime(800, ahora);
+                oscilador.frequency.exponentialRampToValueAtTime(1200, ahora + 0.1);
+                ganancia.gain.setValueAtTime(0, ahora);
+                ganancia.gain.linearRampToValueAtTime(0.3, ahora + 0.05);
+                ganancia.gain.linearRampToValueAtTime(0, ahora + 0.2);
+                oscilador.start(ahora);
+                oscilador.stop(ahora + 0.2);
+            } else {
+                oscilador.type = 'sawtooth';
+                oscilador.frequency.setValueAtTime(150, ahora);
+                ganancia.gain.setValueAtTime(0, ahora);
+                ganancia.gain.linearRampToValueAtTime(0.3, ahora + 0.1);
+                ganancia.gain.linearRampToValueAtTime(0, ahora + 0.6);
+                oscilador.start(ahora);
+                oscilador.stop(ahora + 0.6);
+            }
+        }
+
+        async function abrirCamara() {
+            // Verificar si el contexto es seguro (HTTPS)
+            if (!window.isSecureContext) {
+                showMessage('Acceso Denegado', 'La cámara solo funciona en conexiones seguras (HTTPS). Si abriste el archivo localmente, el navegador lo bloquea por seguridad.', 'error');
+                return;
+            }
+
+            const modal = document.getElementById('cameraModal');
+            const video = document.getElementById('videoElement');
+            const instruccionP = document.getElementById('instruccionCamara');
+            const btnLinterna = document.getElementById('btnLinterna');
+            const corte = document.getElementById('corteSelect').value;
+            
+            instruccionP.innerHTML = `<strong>Corte Bs ${corte}:</strong> Enfoque el número de serie y la letra en la esquina inferior izquierda.`;
+            modal.classList.remove('hidden');
+            
+            try {
+                streamCamara = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } 
+                });
+                video.srcObject = streamCamara;
+                trackCamara = streamCamara.getVideoTracks()[0];
+                const capabilities = trackCamara.getCapabilities();
+                if (capabilities.torch) {
+                    btnLinterna.classList.remove('hidden');
+                    linternaEncendida = false;
+                }
+            } catch (error) {
+                cerrarCamara();
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    showMessage('Permiso Denegado', 'Has rechazado el acceso a la cámara. Debes ir a los ajustes de tu navegador y permitir el acceso para este sitio.', 'error');
+                } else {
+                    showMessage('Error de Cámara', 'No se pudo iniciar la cámara. Asegúrate de que ninguna otra aplicación la esté usando.', 'error');
+                }
+            }
+        }
+
+        async function toggleLinterna() {
+            if (!trackCamara) return;
+            try {
+                linternaEncendida = !linternaEncendida;
+                await trackCamara.applyConstraints({ advanced: [{ torch: linternaEncendida }] });
+                document.getElementById('iconoLinterna').classList.toggle('text-yellow-500', linternaEncendida);
+                document.getElementById('iconoLinterna').classList.toggle('fill-yellow-500', linternaEncendida);
+            } catch (e) {}
+        }
+
+        function cerrarCamara() {
+            document.getElementById('cameraModal').classList.add('hidden');
+            if (streamCamara) {
+                streamCamara.getTracks().forEach(track => track.stop());
+                streamCamara = null;
+                trackCamara = null;
+            }
+            document.getElementById('ocrLoading').classList.add('hidden');
+            document.getElementById('captureBtn').disabled = false;
+            document.getElementById('scanLine').classList.add('hidden');
+        }
+
+        async function capturarYLeer() {
+            const video = document.getElementById('videoElement');
+            const canvas = document.getElementById('canvasElement');
+            const ctx = canvas.getContext('2d');
+            const btn = document.getElementById('captureBtn');
+            const loading = document.getElementById('ocrLoading');
+            const scanLine = document.getElementById('scanLine');
+
+            btn.disabled = true;
+            loading.classList.remove('hidden');
+            scanLine.classList.remove('hidden');
+            scanLine.classList.add('animate-scan');
+
+            const vWidth = video.videoWidth;
+            const vHeight = video.videoHeight;
+            const cropWidth = vWidth * 0.75; 
+            const cropHeight = vHeight * 0.20; 
+            const startX = (vWidth - cropWidth) / 2;
+            const startY = (vHeight - cropHeight) / 2;
+
+            canvas.width = cropWidth;
+            canvas.height = cropHeight;
+            ctx.filter = 'grayscale(100%) contrast(300%) brightness(110%)';
+            ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+            ctx.filter = 'none';
+
+            try {
+                const worker = await Tesseract.createWorker('eng');
+                await worker.setParameters({ tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ ' });
+                const { data: { text } } = await worker.recognize(canvas);
+                await worker.terminate();
+
+                let textoCrudo = text.toUpperCase().replace(/\s+/g, '');
+                const match = textoCrudo.match(/(\d{7,10})([A-Z]?)/);
+
+                if (match) {
+                    document.getElementById('codigoInput').value = match[1] + (match[2] ? ' ' + match[2] : '');
+                    cerrarCamara();
+                    verificarCodigo(); 
+                } else {
+                    showMessage('No Detectado', 'No pudimos leer la serie claramente. Intenta acercar más la cámara o mejorar la iluminación.', 'info');
+                    cerrarCamara();
+                }
+            } catch (error) {
+                cerrarCamara();
+                showMessage('Error OCR', 'Hubo un fallo al procesar la imagen.', 'error');
+            }
+        }
+
+        function verificarCodigo() {
+            const input = document.getElementById('codigoInput');
+            const corteSelect = document.getElementById('corteSelect');
+            const codigoRaw = input.value.trim().toUpperCase();
+            const corte = corteSelect.value;
+            const resArea = document.getElementById('resultadoArea');
+            const icono = document.getElementById('iconoResultado');
+            const titulo = document.getElementById('tituloResultado');
+            const mensaje = document.getElementById('mensajeResultado');
+
+            if (codigoRaw === '') return;
+            const num = parseInt(codigoRaw.replace(/\D/g, ''), 10);
+            const letra = codigoRaw.replace(/[^A-Z]/g, '').slice(-1);
+
+            if (isNaN(num)) return;
+            const rangos = rangosInhabilitados[corte];
+            let inhabilitado = false;
+            if (rangos) {
+                for (let r of rangos) { if (num >= r.min && num <= r.max) { inhabilitado = true; break; } }
+            }
+
+            resArea.classList.remove('hidden');
+            if (inhabilitado && letra === 'B') {
+                reproducirSonido('alerta');
+                resArea.className = 'mt-6 rounded-lg p-4 border border-red-200 bg-red-50 text-red-800 block shadow-sm';
+                icono.innerHTML = '<i data-lucide="x-octagon" class="w-8 h-8 text-red-600"></i>';
+                titulo.textContent = 'BILLETE FUERA DE CIRCULACION';
+                mensaje.innerHTML = `Serie <strong>${num} B</strong> inhabilitada.`;
+                agregarAlHistorial(corte, `${num} B`, false);
+            } else if (inhabilitado && letra === '') {
+                reproducirSonido('alerta');
+                resArea.className = 'mt-6 rounded-lg p-4 border border-yellow-200 bg-yellow-50 text-yellow-800 block shadow-sm';
+                icono.innerHTML = '<i data-lucide="alert-triangle" class="w-8 h-8 text-yellow-600"></i>';
+                titulo.textContent = 'REVISAR LETRA';
+                mensaje.innerHTML = `Serie en riesgo. Solo inválidos si terminan en <strong>"B"</strong>.`;
+            } else {
+                reproducirSonido('valido');
+                resArea.className = 'mt-6 rounded-lg p-4 border border-green-200 bg-green-50 text-green-800 block shadow-sm';
+                icono.innerHTML = '<i data-lucide="check-circle-2" class="w-8 h-8 text-green-600"></i>';
+                titulo.textContent = 'BILLETE VALIDO';
+                mensaje.innerHTML = `Serie <strong>${num} ${letra}</strong> válida.`;
+                agregarAlHistorial(corte, `${num} ${letra}`.trim(), true);
+            }
+            lucide.createIcons();
+        }
+
+        function limpiarFormulario() {
+            document.getElementById('codigoInput').value = '';
+            document.getElementById('resultadoArea').classList.add('hidden');
+            document.getElementById('codigoInput').focus();
+        }
+
+        function agregarAlHistorial(corte, serie, esValido) {
+            const contenedor = document.getElementById('historialContenedor');
+            const lista = document.getElementById('listaHistorial');
+            const contador = document.getElementById('contadorSesion');
+            contenedor.classList.remove('hidden');
+            const hora = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            historialVerificaciones.unshift({ corte, serie, esValido, hora });
+            if (historialVerificaciones.length > 10) historialVerificaciones.pop();
+            contador.textContent = `${historialVerificaciones.length} Billetes`;
+            lista.innerHTML = historialVerificaciones.map(i => `
+                <div class="flex items-center justify-between p-3 rounded-lg border ${i.esValido ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}">
+                    <p class="text-xs font-bold">Bs ${i.corte} - ${i.serie}</p>
+                    <span class="text-[10px] opacity-60">${i.hora}</span>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+    </script>
+</body>
+</html>
